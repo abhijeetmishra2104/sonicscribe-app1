@@ -2,6 +2,7 @@ services:
   - type: web
     name: sonicscribe-app
     env: docker
+    repo: https://github.com/abhijeetmishra2104/sonicscribe-app1
     region: oregon
     plan: free
     dockerfilePath: ./Dockerfile
