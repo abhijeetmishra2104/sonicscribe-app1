@@ -1,0 +1,12 @@
+version: '3.9'
+
+services:
+  sonicscribe-app:
+    build: .
+    container_name: sonicscribe-app1
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./uploads:/app/uploads  # Mount uploads folder

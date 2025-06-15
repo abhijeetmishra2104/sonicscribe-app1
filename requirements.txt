@@ -1,25 +1,11 @@
-pandas
-numpy 
-flask 
-render 
-ipykernel
-torch
-git+https://github.com/openai/whisper.git
-langchain_openai
-langchain_huggingface
-huggingface_hub
-langchain_community
-langchain
-langchain-core
-pydantic
-transformers
-accelerate
-python-dotenv
-torch
-openai
-seaborn
-matplotlib
-joblib
+flask
 flask-cors
-scikit-learn
-gunicorn
+pandas
+python-dotenv
+requests
+openai
+openai-whisper @ git+https://github.com/openai/whisper.git
+torch  # torch must match your CPU/GPU; for CPU-only, use torch==2.1.0+cpu
+langchain
+langchain-openai
+langchain-core

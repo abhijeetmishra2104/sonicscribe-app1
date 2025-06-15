@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: sonicscribe-app1
+    env: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: OPENAI_API_KEY
+        value: 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
+      - key: LANGCHAIN_API_KEY
+        value: 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
+      - key: LANGCHAIN_PROJECT
+        value: Cyfuture
+      - key: HF_TOKEN
+        value: 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
+    autoDeploy: true
