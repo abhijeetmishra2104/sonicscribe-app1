@@ -1,4 +1,4 @@
-name: CI/CD to Heroku
+name: CI/CD to Heroku (Manual CLI)
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -23,9 +23,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Heroku CLI
+        run: |
+          curl https://cli-assets.heroku.com/install.sh | sh
+
       - name: Deploy to Heroku
-        uses: snithin999/heroku-deploy@v1.2.6
-        with:
-          heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
-          heroku_app_name: "sonicscribe-flaskapp"
-          heroku_email: "mishrabhijeet2104@gmail.com"
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          echo "machine api.heroku.com" > ~/.netrc
+          echo "  login ${{ secrets.HEROKU_EMAIL }}" >> ~/.netrc
+          echo "  password $HEROKU_API_KEY" >> ~/.netrc
+          echo "machine git.heroku.com" >> ~/.netrc
+          echo "  login ${{ secrets.HEROKU_EMAIL }}" >> ~/.netrc
+          echo "  password $HEROKU_API_KEY" >> ~/.netrc
+          
+          heroku git:remote -a sonicscribe-flaskapp
+          git push https://heroku:$HEROKU_API_KEY@git.heroku.com/sonicscribe-flaskapp.git HEAD:main --force
