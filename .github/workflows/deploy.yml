@@ -10,8 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout full history
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -39,4 +41,5 @@ jobs:
           echo "  password $HEROKU_API_KEY" >> ~/.netrc
           
           heroku git:remote -a sonicscribe-flaskapp
+          git fetch --all --unshallow
           git push https://heroku:$HEROKU_API_KEY@git.heroku.com/sonicscribe-flaskapp.git HEAD:main --force
