@@ -41,5 +41,4 @@ jobs:
           echo "  password $HEROKU_API_KEY" >> ~/.netrc
           
           heroku git:remote -a sonicscribe-flaskapp
-          git fetch --all --unshallow
           git push https://heroku:$HEROKU_API_KEY@git.heroku.com/sonicscribe-flaskapp.git HEAD:main --force
