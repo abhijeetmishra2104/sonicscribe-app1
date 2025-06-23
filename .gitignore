@@ -35,3 +35,6 @@ uploads/
 
 # Docker
 docker-compose.override.yml
+model4.pkl
+temp_audio.mp3
+uploads/

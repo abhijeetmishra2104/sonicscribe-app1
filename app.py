@@ -5,6 +5,7 @@ import whisper
 import pickle
 import pandas as pd
 from dotenv import load_dotenv
+import gdown
 
 # Load environment variables
 load_dotenv()
@@ -42,7 +43,15 @@ prompt_2 = ChatPromptTemplate.from_messages([
 chain_2 = prompt_2 | llm_2 | StrOutputParser()
 
 # Load ML model for risk prediction
+
 model4_path = os.path.join(os.path.dirname(__file__), 'model4.pkl')
+
+# Download model if it doesn't exist
+if not os.path.exists(model4_path):
+    print("Downloading model4.pkl from Google Drive...")
+    gdown.download("https://drive.google.com/uc?id=1lXRkB3qWgoqwXpo4E12mQtTZtdKObZ4e", model4_path, quiet=False)
+
+# Load the model
 with open(model4_path, 'rb') as f:
     model4 = pickle.load(f)
 
