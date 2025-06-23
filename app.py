@@ -1,77 +1,121 @@
-import pandas as pd
-from flask import Flask , request , jsonify , render_template
-import whisper
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 import os
+import whisper
+import pickle
+import pandas as pd
 from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT")
+
+# LangChain setup
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from flask_cors import CORS
-load_dotenv()
 
-os.environ['OPENAI_API_KEY']=os.getenv("OPENAI_API_KEY")
-## Langsmith Tracking
-os.environ["LANGCHAIN_API_KEY"]=os.getenv("LANGCHAIN_API_KEY")
-os.environ["LANGCHAIN_TRACING_V2"]="true"
-os.environ["LANGCHAIN_PROJECT"]=os.getenv("LANGCHAIN_PROJECT")
+# Whisper model
+whisper_model = whisper.load_model("base")
 
+# LangChain chains
+llm_1 = ChatOpenAI(model="gpt-4o")
+prompt_1 = ChatPromptTemplate.from_messages([
+    ("system", """Extract the following structured details from the given clinical note: Name , Age/Gender,Medical History,Symptoms,Notes (Summarize any additional context or observations),Risk Prediction (based on symptoms and medical history),Possible Disease(You have to predict possible disease) , Recommendation (next steps for care or treatment , tell whether the person should admitted to hospital or not)"""),
+    ("user", "{input}")
+])
+chain_1 = prompt_1 | llm_1 | StrOutputParser()
 
+llm_2 = ChatOpenAI(model="gpt-4o")
+prompt_2 = ChatPromptTemplate.from_messages([
+    ("system", '''You are a professional healthcare assistant. The user will enter their symptoms. 
+                  Based on the symptoms, provide:
+                  1. Probable conditions (up to 3).
+                  2. Triage level: Emergency / Urgent / Non-Urgent.
+                  3. Specialist to consult.
+                  Always advise consulting a real doctor.'''),
+    ("user", "{input}")
+])
+chain_2 = prompt_2 | llm_2 | StrOutputParser()
 
+# Load ML model for risk prediction
+model4_path = os.path.join(os.path.dirname(__file__), 'model4.pkl')
+with open(model4_path, 'rb') as f:
+    model4 = pickle.load(f)
+
+# Flask app
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
 CORS(app)
+UPLOAD_FOLDER = 'uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Load Whisper model
-model = whisper.load_model("base") 
+# === ROUTES ===
 
-llm=ChatOpenAI(model="gpt-4o")
-### Chatprompt Template
-prompt=ChatPromptTemplate.from_messages(
-    [
-        ("system","Extract the following structured details from the given clinical note: Name , Age/Gender,Medical History,Symptoms,Notes (Summarize any additional context or observations),Risk Prediction (based on symptoms and medical history),Possible Disease(You have to predict possible disease) , Recommendation (next steps for care or treatment , tell wheather the person should admitted to hospital or not)"),
-        ("user","{input}")
-    ]
-
-)
-
-output_parser=StrOutputParser()
-chain=prompt|llm|output_parser
-
-
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
+    return render_template('index.html')
+
+# === Endpoint 1: Transcription + Diagnosis (App1 logic) ===
+@app.route('/api/analyze-note', methods=['POST'])
+def analyze_note():
+    audio = request.files.get('audio_file')
+    if not audio:
+        return jsonify({"error": "Audio file missing"}), 400
+
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
+    audio.save(file_path)
+
+    result = whisper_model.transcribe(file_path, task="translate")
+    response = chain_1.invoke({"input": result["text"]})
+    return jsonify({"transcript": result["text"], "response": response})
+
+# === Endpoint 2: Text or Audio Symptom Analysis (App2 logic) ===
+@app.route('/api/analyze-symptoms', methods=['POST'])
+def analyze_symptoms():
+    text_input = request.form.get('text_input')
+    audio_file = request.files.get('audio_file')
     transcript = None
-    if request.method == 'POST':
-        audio = request.files['audio_file']
-        if audio:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
-            audio.save(file_path)
 
-            result = model.transcribe(file_path, task="translate")  # auto translates to English
-            response=chain.invoke({"input":result["text"]})
-            print(response)
-            transcript = response
-            
-    return render_template('index.html', transcript=transcript)
+    if text_input:
+        response = chain_2.invoke({"input": text_input})
+    elif audio_file and audio_file.filename != '':
+        audio_path = os.path.join(app.config['UPLOAD_FOLDER'], audio_file.filename)
+        audio_file.save(audio_path)
+        transcript = whisper_model.transcribe(audio_path)["text"]
+        response = chain_2.invoke({"input": transcript})
+    else:
+        return jsonify({"error": "No input provided"}), 400
 
-@app.route('/process-audio-url', methods=['POST'])
-def process_audio_url():
-    data = request.get_json()
-    audio_url = data.get('url')
+    return jsonify({"response": response, "transcript": transcript})
 
-    if not audio_url:
-        return jsonify({"error": "No audio URL provided"}), 400
+# === Endpoint 3: Hospital Risk Prediction (App4 logic) ===
+@app.route('/api/predict', methods=['POST'])
+def predict():
+    try:
+        data = request.get_json()
+        features = pd.DataFrame([[
+            int(data['age']),
+            int(data['gender']),
+            int(data['primaryDiagnosis']),
+            int(data['numProcedures']),
+            int(data['daysInHospital']),
+            int(data['comorbidityScore']),
+            int(data['dischargeTo'])
+        ]], columns=["age", "gender", "primary_diagnosis", "num_procedures", "days_in_hospital", "comorbidity_score", "discharge_to"])
 
-    # Download audio from URL
-    import requests
-    with requests.get(audio_url, stream=True) as r:
-        with open("temp_audio.mp3", 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+        risk = model4.predict_proba(features)[0][1] * 100
+        decision = "Hospitalize Patient" if risk > 50 else "No Hospitalization Needed"
 
-    result = model.transcribe("temp_audio.mp3", task="translate")
-    response = chain.invoke({"input": result["text"]})
-    return jsonify({"result": response})
+        return jsonify({"risk": risk, "decision": decision})
+
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"error": "Internal server error"}), 500
 
 
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=5000)

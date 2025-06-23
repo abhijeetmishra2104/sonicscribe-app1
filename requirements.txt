@@ -1,11 +1,12 @@
 flask
 flask-cors
-pandas
 python-dotenv
-requests
 openai
-openai-whisper @ git+https://github.com/openai/whisper.git
-torch  # torch must match your CPU/GPU; for CPU-only, use torch==2.1.0+cpu
 langchain
 langchain-openai
-langchain-core
+openai-whisper
+gunicorn
+pandas
+numpy
+scikit-learn
+requests

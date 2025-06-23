@@ -1,85 +1,37 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
-# ─── Node Dependencies ───────────────────────────────
-node_modules/
-web-app/node_modules/
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+*.env
 
-# ─── Package Managers ────────────────────────────────
-.pnpm-debug.log*
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Python/Jupyter
+*.ipynb_checkpoints
+.ipynb_checkpoints/
+*.ipynb
 
-# ─── Yarn Berry (v2+) ────────────────────────────────
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
-.yarnrc.yml
-.pnp*
-.pnp
+# Audio
+*.mp3
+*.wav
+temp_audio.mp3
+uploads/
 
-# ─── Next.js ─────────────────────────────────────────
-.next/
-out/
-next-env.d.ts
+# Environment
+.env
 
-# ─── Build Output ───────────────────────────────────
-build/
-dist/
-
-# ─── Testing ────────────────────────────────────────
-coverage/
-test-output/
-
-# ─── TypeScript ─────────────────────────────────────
-*.tsbuildinfo
-
-# ─── Environment Variables ──────────────────────────
-.env*
-!.env.example
-
-# ─── OS Files ───────────────────────────────────────
-.DS_Store
-Thumbs.db
-
-# ─── SSL / Secrets ──────────────────────────────────
-*.pem
-*.key
-*.crt
-
-# ─── Logs ───────────────────────────────────────────
-*.log
-logs/
-
-# ─── Vercel ─────────────────────────────────────────
-.vercel/
-
-# ─── IDE / Editor Folders ───────────────────────────
+# VSCode
 .vscode/
-.idea/
-*.sw?
 
-# ─── Optional: Remove Mac metadata ─────────────────
-.AppleDouble
-.LSOverride
+# Logs
+*.log
 
-# ─── Optional: Local preview output ─────────────────
-*.local
+# OS junk
+.DS_Store
 
-# ─── Optional: Global Git Ignore Examples ──────────
-*.tgz
-*.gz
-*.zip
-*.bak
-*.tmp
-*.temp
-*.old
-
-
-
-
-ai-model/venv/
-**/venv/
+# Docker
+docker-compose.override.yml
