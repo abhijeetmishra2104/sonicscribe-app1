@@ -4,10 +4,8 @@ python-dotenv
 openai
 langchain
 langchain-openai
-openai-whisper
 gunicorn
 pandas
 numpy
 scikit-learn
-requests
 gdown

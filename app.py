@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import os
-import whisper
+import openai
 import pickle
 import pandas as pd
 from dotenv import load_dotenv
@@ -9,7 +9,7 @@ import gdown
 
 # Load environment variables
 load_dotenv()
-os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT")
@@ -19,13 +19,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# Whisper model
-whisper_model = whisper.load_model("base")
-
 # LangChain chains
 llm_1 = ChatOpenAI(model="gpt-4o")
 prompt_1 = ChatPromptTemplate.from_messages([
-    ("system", """Extract the following structured details from the given clinical note: Name , Age/Gender,Medical History,Symptoms,Notes (Summarize any additional context or observations),Risk Prediction (based on symptoms and medical history),Possible Disease(You have to predict possible disease) , Recommendation (next steps for care or treatment , tell whether the person should admitted to hospital or not)"""),
+    ("system", """Extract the following structured details from the given clinical note: Name , Age/Gender, Medical History, Symptoms, Notes (Summarize any additional context or observations), Risk Prediction (based on symptoms and medical history), Possible Disease (You have to predict possible disease), Recommendation (next steps for care or treatment , tell whether the person should be admitted to hospital or not)"""),
     ("user", "{input}")
 ])
 chain_1 = prompt_1 | llm_1 | StrOutputParser()
@@ -43,15 +40,11 @@ prompt_2 = ChatPromptTemplate.from_messages([
 chain_2 = prompt_2 | llm_2 | StrOutputParser()
 
 # Load ML model for risk prediction
-
 model4_path = os.path.join(os.path.dirname(__file__), 'model4.pkl')
-
-# Download model if it doesn't exist
 if not os.path.exists(model4_path):
     print("Downloading model4.pkl from Google Drive...")
     gdown.download("https://drive.google.com/uc?id=1lXRkB3qWgoqwXpo4E12mQtTZtdKObZ4e", model4_path, quiet=False)
 
-# Load the model
 with open(model4_path, 'rb') as f:
     model4 = pickle.load(f)
 
@@ -61,8 +54,6 @@ CORS(app)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# === ROUTES ===
 
 @app.route('/')
 def index():
@@ -78,9 +69,11 @@ def analyze_note():
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
     audio.save(file_path)
 
-    result = whisper_model.transcribe(file_path, task="translate")
-    response = chain_1.invoke({"input": result["text"]})
-    return jsonify({"transcript": result["text"], "response": response})
+    with open(file_path, "rb") as f:
+        transcript_data = openai.Audio.transcribe("whisper-1", f)
+
+    response = chain_1.invoke({"input": transcript_data["text"]})
+    return jsonify({"transcript": transcript_data["text"], "response": response})
 
 # === Endpoint 2: Text or Audio Symptom Analysis (App2 logic) ===
 @app.route('/api/analyze-symptoms', methods=['POST'])
@@ -94,8 +87,10 @@ def analyze_symptoms():
     elif audio_file and audio_file.filename != '':
         audio_path = os.path.join(app.config['UPLOAD_FOLDER'], audio_file.filename)
         audio_file.save(audio_path)
-        transcript = whisper_model.transcribe(audio_path)["text"]
-        response = chain_2.invoke({"input": transcript})
+        with open(audio_path, "rb") as f:
+            transcript_data = openai.Audio.transcribe("whisper-1", f)
+            transcript = transcript_data["text"]
+            response = chain_2.invoke({"input": transcript})
     else:
         return jsonify({"error": "No input provided"}), 400
 
@@ -124,7 +119,6 @@ def predict():
     except Exception as e:
         print("Error:", e)
         return jsonify({"error": "Internal server error"}), 500
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
