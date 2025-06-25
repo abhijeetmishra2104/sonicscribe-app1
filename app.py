@@ -68,7 +68,7 @@ def index():
 @app.route('/api/analyze-note', methods=['POST'])
 def analyze_note():
     audio = request.files.get('audio_file')
-    audio_url = request.json.get("url") if request.is_json else None
+    audio_url = request.json.get("file", {}).get("url") if request.is_json else None
 
     if not audio and not audio_url:
         return jsonify({"error": "Audio file or URL missing"}), 400
