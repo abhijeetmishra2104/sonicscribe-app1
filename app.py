@@ -5,6 +5,7 @@ import pickle
 import pandas as pd
 from dotenv import load_dotenv
 import gdown
+from urllib.request import urlopen
 
 # Load environment variables
 load_dotenv()
@@ -64,23 +65,37 @@ def index():
     return render_template('index.html')
 
 # === Endpoint 1: Transcription + Diagnosis (App1 logic) ===
+
 @app.route('/api/analyze-note', methods=['POST'])
 def analyze_note():
     audio = request.files.get('audio_file')
-    if not audio:
-        return jsonify({"error": "Audio file missing"}), 400
+    audio_url = request.json.get("url") if request.is_json else None
 
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
-    audio.save(file_path)
+    if not audio and not audio_url:
+        return jsonify({"error": "Audio file or URL missing"}), 400
 
-    with open(file_path, "rb") as f:
-        transcript_data = openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f
-        )
+    if audio:
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
+        audio.save(file_path)
+    else:
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], 'downloaded_audio.mp3')
+        try:
+            with open(file_path, 'wb') as f:
+                f.write(urlopen(audio_url).read())
+        except Exception as e:
+            return jsonify({"error": f"Failed to download audio: {str(e)}"}), 500
 
-    response = chain_1.invoke({"input": transcript_data.text})
-    return jsonify({"transcript": transcript_data.text, "response": response})
+    try:
+        with open(file_path, "rb") as f:
+            transcript_data = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f
+            )
+        response = chain_1.invoke({"input": transcript_data.text})
+        return jsonify({"transcript": transcript_data.text, "response": response})
+    except Exception as e:
+        return jsonify({"error": f"Transcription or analysis failed: {str(e)}"}), 500
+
 
 # === Endpoint 2: Text or Audio Symptom Analysis (App2 logic) ===
 @app.route('/api/analyze-symptoms', methods=['POST'])
