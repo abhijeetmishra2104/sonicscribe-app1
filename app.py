@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import os
-import openai
 import pickle
 import pandas as pd
 from dotenv import load_dotenv
@@ -9,7 +8,12 @@ import gdown
 
 # Load environment variables
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# OpenAI setup
+from openai import OpenAI
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# LangChain environment variables
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT")
@@ -48,7 +52,7 @@ if not os.path.exists(model4_path):
 with open(model4_path, 'rb') as f:
     model4 = pickle.load(f)
 
-# Flask app
+# Flask app setup
 app = Flask(__name__)
 CORS(app)
 UPLOAD_FOLDER = 'uploads'
@@ -70,10 +74,13 @@ def analyze_note():
     audio.save(file_path)
 
     with open(file_path, "rb") as f:
-        transcript_data = openai.Audio.transcribe("whisper-1", f)
+        transcript_data = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f
+        )
 
-    response = chain_1.invoke({"input": transcript_data["text"]})
-    return jsonify({"transcript": transcript_data["text"], "response": response})
+    response = chain_1.invoke({"input": transcript_data.text})
+    return jsonify({"transcript": transcript_data.text, "response": response})
 
 # === Endpoint 2: Text or Audio Symptom Analysis (App2 logic) ===
 @app.route('/api/analyze-symptoms', methods=['POST'])
@@ -88,8 +95,11 @@ def analyze_symptoms():
         audio_path = os.path.join(app.config['UPLOAD_FOLDER'], audio_file.filename)
         audio_file.save(audio_path)
         with open(audio_path, "rb") as f:
-            transcript_data = openai.Audio.transcribe("whisper-1", f)
-            transcript = transcript_data["text"]
+            transcript_data = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f
+            )
+            transcript = transcript_data.text
             response = chain_2.invoke({"input": transcript})
     else:
         return jsonify({"error": "No input provided"}), 400
