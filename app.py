@@ -5,7 +5,6 @@ import pickle
 import pandas as pd
 from dotenv import load_dotenv
 import gdown
-from urllib.request import urlopen
 
 # Load environment variables
 load_dotenv()
@@ -68,20 +67,12 @@ def index():
 @app.route('/api/analyze-note', methods=['POST'])
 def analyze_note():
     audio = request.files.get('audio_file')
-    audio_url = request.json.get("file", {}).get("url") if request.is_json else None
+    if not audio:
+        return jsonify({"error": "Audio file missing"}), 400
 
-    if not audio and not audio_url:
-        return jsonify({"error": "Audio file or URL missing"}), 400
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
+    audio.save(file_path)
 
-    if audio:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
-        audio.save(file_path)
-    elif audio_url:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], 'downloaded_audio.mp3')
-        with open(file_path, 'wb') as f:
-            f.write(urlopen(audio_url).read())
-
-    # Transcribe
     with open(file_path, "rb") as f:
         transcript_data = openai_client.audio.transcriptions.create(
             model="whisper-1",
