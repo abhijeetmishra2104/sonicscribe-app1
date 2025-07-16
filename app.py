@@ -24,25 +24,40 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# LangChain chains
-llm_1 = ChatOpenAI(model="gpt-4o")
-prompt_1 = ChatPromptTemplate.from_messages([
-    ("system", """Extract the following structured details from the given clinical note: Name , Age/Gender, Medical History, Symptoms, Notes (Summarize any additional context or observations), Risk Prediction (based on symptoms and medical history), Possible Disease (You have to predict possible disease), Recommendation (next steps for care or treatment , tell whether the person should be admitted to hospital or not)"""),
-    ("user", "{input}")
-])
-chain_1 = prompt_1 | llm_1 | StrOutputParser()
+def save_uploaded_audio(audio, filename):
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    audio.save(path)
+    return path
 
-llm_2 = ChatOpenAI(model="gpt-4o")
-prompt_2 = ChatPromptTemplate.from_messages([
-    ("system", '''You are a professional healthcare assistant. The user will enter their symptoms. 
-                  Based on the symptoms, provide:
-                  1. Probable conditions (up to 3).
-                  2. Triage level: Emergency / Urgent / Non-Urgent.
-                  3. Specialist to consult.
-                  Always advise consulting a real doctor.'''),
+def download_audio_from_url(url, filename="downloaded_audio.mp3"):
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    with open(path, 'wb') as f:
+        f.write(urlopen(url).read())
+    return path
+
+def transcribe_audio(file_path):
+    with open(file_path, "rb") as f:
+        result = openai_client.audio.transcriptions.create(model="whisper-1", file=f)
+    return result.text
+
+# LangChain chains
+prompt_1 = ChatPromptTemplate.from_messages([
+    ("system", """You are a medical assistant. Extract this structured JSON from the user's clinical note:
+{
+  "name": "",
+  "age_gender": "",
+  "medical_history": [],
+  "symptoms": [],
+  "notes": "",
+  "risk_prediction": "",
+  "possible_disease": [],
+  "recommendation": {
+    "next_steps": "",
+    "should_be_admitted": true
+  }
+}"""),
     ("user", "{input}")
 ])
-chain_2 = prompt_2 | llm_2 | StrOutputParser()
 
 # Load ML model for risk prediction
 model4_path = os.path.join(os.path.dirname(__file__), 'model4.pkl')
@@ -68,33 +83,52 @@ def index():
 
 @app.route('/api/analyze-note', methods=['POST'])
 def analyze_note():
-    audio = request.files.get('audio_file')
-    audio_url = request.json.get("url") if request.is_json else None
+    try:
+        # Get audio
+        audio = request.files.get('audio_file')
+        audio_url = request.json.get("url") if request.is_json else None
 
-    if not audio and not audio_url:
-        return jsonify({"error": "Audio file or URL missing"}), 400
+        if not audio and not audio_url:
+            return jsonify({"error": "Audio file or URL missing"}), 400
 
-    # Save audio file
-    if audio:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], audio.filename)
-        audio.save(file_path)
-    else:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], 'downloaded_audio.mp3')
-        with open(file_path, 'wb') as f:
-            f.write(urlopen(audio_url).read())
+        # Save file
+        if audio:
+            file_path = save_uploaded_audio(audio, audio.filename)
+        else:
+            file_path = download_audio_from_url(audio_url)
 
-    # Transcribe using OpenAI Whisper API
-    with open(file_path, "rb") as f:
-        transcript_data = openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f
-        )
+        # Transcribe
+        transcript = transcribe_audio(file_path)
 
-    response = chain_1.invoke({"input": transcript_data.text})
-    return jsonify({
-        "transcript": transcript_data.text,
-        "response": response
-    })
+        # Run through chain
+        analysis_result = chain_1.invoke({"input": transcript})
+
+        # Optional: run secondary triage analysis
+        triage_result = chain_2.invoke({"input": transcript})
+
+        # Try to parse JSON safely from LLM
+        try:
+            structured_data = json.loads(analysis_result)
+        except Exception:
+            structured_data = {"raw_response": analysis_result}
+
+        return jsonify({
+            "success": True,
+            "file": {
+                "originalName": audio.filename if audio else "downloaded_audio.mp3",
+                "uploadedAt": datetime.utcnow().isoformat(),
+                "url": audio_url  # Optional: cloud upload logic
+            },
+            "analysis": {
+                "transcript": transcript,
+                "structured": structured_data,
+                "triage": json.loads(triage_result) if triage_result else None
+            }
+        })
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 # === Endpoint 2: Text or Audio Symptom Analysis (App2 logic) ===
 @app.route('/api/analyze-symptoms', methods=['POST'])
