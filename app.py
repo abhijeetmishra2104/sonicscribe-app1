@@ -20,7 +20,7 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 import langchain
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.output_parsers import JsonOutputParser
+from langchain_core.output_parsers.json import JsonOutputParser
 
 # LangChain environment variables
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
