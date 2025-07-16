@@ -85,13 +85,14 @@ prompt_1 = ChatPromptTemplate.from_messages([
 
 prompt_2 = ChatPromptTemplate.from_messages([
     ("system", """You are a professional healthcare assistant. The user will enter their symptoms.
-Provide this structured JSON:
-{
-  "probable_conditions": [],
-  "triage_level": "Emergency | Urgent | Non-Urgent",
-  "specialist": ""
-}
-Always advise consulting a real doctor."""), 
+Based on the symptoms, provide the following structured JSON:
+
+{{
+  "probable_conditions": ["Condition 1", "Condition 2", "Condition 3"],
+  "triage_level": "Emergency / Urgent / Non-Urgent",
+  "specialist_to_consult": "Specialist Name",
+  "advice": "Always recommend consulting a real doctor."
+}}"""),
     ("user", "{input}")
 ])
 
