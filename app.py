@@ -66,7 +66,7 @@ parser = JsonOutputParser()
 
 prompt_1 = ChatPromptTemplate.from_messages([
     ("system", """You are a medical assistant. Extract this structured JSON from the user's clinical note:
-{
+{{
   "name": "",
   "age_gender": "",
   "medical_history": [],
@@ -74,13 +74,14 @@ prompt_1 = ChatPromptTemplate.from_messages([
   "notes": "",
   "risk_prediction": "",
   "possible_disease": [],
-  "recommendation": {
+  "recommendation": {{
     "next_steps": "",
     "should_be_admitted": true
-  }
-}"""),
+  }}
+}}"""),
     ("user", "{input}")
 ])
+
 
 prompt_2 = ChatPromptTemplate.from_messages([
     ("system", """You are a professional healthcare assistant. The user will enter their symptoms.
