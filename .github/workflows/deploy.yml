@@ -32,6 +32,8 @@ jobs:
       - name: Deploy to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          HEROKU_EMAIL: ${{ secrets.HEROKU_EMAIL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
         run: |
           echo "machine api.heroku.com" > ~/.netrc
           echo "  login ${{ secrets.HEROKU_EMAIL }}" >> ~/.netrc
