@@ -1,11 +1,10 @@
 flask
 flask-cors
 python-dotenv
-openai>=1.10.0
-langchain
-langchain-openai
-gunicorn
 pandas
-numpy
-scikit-learn
 gdown
+groq
+langchain-core
+langchain-groq
+gunicorn
+scikit-learn==1.7.0

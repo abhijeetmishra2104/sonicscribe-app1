@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import json
 import pickle
+import traceback
 import pandas as pd
 from dotenv import load_dotenv
 from urllib.request import urlopen
@@ -12,20 +13,21 @@ import gdown
 # === Load environment variables ===
 load_dotenv()
 
-# === Setup OpenAI Client ===
-from openai import OpenAI
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# === Setup Groq Client (for audio transcription) ===
+from groq import Groq
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# === LangChain Setup ===
-import langchain
-from langchain_openai import ChatOpenAI
+# === LangChain Setup (now using Groq's LLM instead of OpenAI) ===
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.json import JsonOutputParser
 
-# LangChain environment variables
-os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT")
+# LangChain tracing env vars are optional — only set them if provided,
+# otherwise os.environ[...] = None crashes at import time.
+if os.getenv("LANGCHAIN_API_KEY"):
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "sonicscribe")
 
 # === Flask App Setup ===
 app = Flask(__name__)
@@ -57,15 +59,23 @@ def download_audio_from_url(url, filename="downloaded_audio.mp3"):
     return path
 
 def transcribe_audio(file_path):
+    """Transcribe audio using Groq's hosted Whisper model."""
     with open(file_path, "rb") as f:
-        result = openai_client.audio.transcriptions.create(model="whisper-1", file=f)
-    return result.text
+        transcription = groq_client.audio.transcriptions.create(
+            file=(os.path.basename(file_path), f.read()),
+            model="whisper-large-v3-turbo",  # fast + cheap; use "whisper-large-v3" for max accuracy
+            response_format="text",
+            temperature=0.0,
+        )
+    # response_format="text" returns a plain string directly
+    return transcription if isinstance(transcription, str) else transcription.text
 
-# === LangChain Prompts and Chains ===
+# === LangChain Prompts and Chains (Groq-backed) ===
 parser = JsonOutputParser()
 
 prompt_1 = ChatPromptTemplate.from_messages([
-    ("system", """You are a medical assistant. Extract this structured JSON from the user's clinical note:
+    ("system", """You are a medical assistant. Extract this structured JSON from the user's clinical note.
+Respond with ONLY valid JSON, no markdown formatting, no code fences, no extra text.
 {{
   "name": "",
   "age_gender": "",
@@ -85,7 +95,8 @@ prompt_1 = ChatPromptTemplate.from_messages([
 
 prompt_2 = ChatPromptTemplate.from_messages([
     ("system", """You are a professional healthcare assistant. The user will enter their symptoms.
-Based on the symptoms, provide the following structured JSON:
+Based on the symptoms, provide the following structured JSON.
+Respond with ONLY valid JSON, no markdown formatting, no code fences, no extra text.
 
 {{
   "probable_conditions": ["Condition 1", "Condition 2", "Condition 3"],
@@ -96,8 +107,10 @@ Based on the symptoms, provide the following structured JSON:
     ("user", "{input}")
 ])
 
-llm_1 = ChatOpenAI(model="gpt-4o")
-llm_2 = ChatOpenAI(model="gpt-4o")
+# Groq's Llama 3.3 70B is a strong general-purpose replacement for gpt-4o here.
+# Other good options: "llama-3.1-8b-instant" (cheaper/faster), "mixtral-8x7b-32768".
+llm_1 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
+llm_2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
 
 chain_1 = prompt_1 | llm_1 | parser
 chain_2 = prompt_2 | llm_2 | parser
@@ -114,7 +127,7 @@ def analyze_note():
         audio_url = request.json.get("url") if request.is_json else None
 
         if not audio and not audio_url:
-            return jsonify({"error": "Audio file or URL missing"}), 400
+            return jsonify({"success": False, "error": "Audio file or URL missing"}), 400
 
         if audio:
             file_path = save_uploaded_audio(audio, audio.filename)
@@ -142,6 +155,7 @@ def analyze_note():
         })
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/analyze-symptoms', methods=['POST'])
@@ -158,12 +172,14 @@ def analyze_symptoms():
             transcript = transcribe_audio(file_path)
             result = chain_2.invoke({"input": transcript})
         else:
-            return jsonify({"error": "No input provided"}), 400
+            return jsonify({"success": False, "error": "No input provided"}), 400
 
-        return jsonify({"response": result, "transcript": transcript})
+        return jsonify({"success": True, "response": result, "transcript": transcript})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()  # full stack trace lands in your Flask/host logs
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
@@ -186,10 +202,11 @@ def predict():
         risk = model4.predict_proba(features)[0][1] * 100
         decision = "Hospitalize Patient" if risk > 50 else "No Hospitalization Needed"
 
-        return jsonify({"risk": risk, "decision": decision})
+        return jsonify({"success": True, "risk": risk, "decision": decision})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # === Start Server ===
 if __name__ == '__main__':

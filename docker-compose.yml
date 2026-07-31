@@ -5,7 +5,7 @@ services:
     build: .
     container_name: sonicscribe-flaskapps
     ports:
-      - "8080:5000"  # Maps external port 8080 to internal port 5000 (Gunicorn runs on 5000)
+      - "8080:5001"  # Maps external port 8080 to internal port 5001 (Gunicorn runs on 5001)
     env_file:
       - .env
     volumes:
