@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import os
 import json
+import base64
+import mimetypes
 import pickle
 import traceback
 import pandas as pd
@@ -13,14 +15,25 @@ import gdown
 # === Load environment variables ===
 load_dotenv()
 
-# === Setup Groq Client (for audio transcription) ===
-from groq import Groq
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
-# === LangChain Setup (now using Groq's LLM instead of OpenAI) ===
-from langchain_groq import ChatGroq
+# === LangChain Setup (Google Gemini) ===
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.json import JsonOutputParser
+from langchain_core.messages import HumanMessage
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is not set. Add it to your .env or host config.")
+
+# Google retires model ids periodically — a retired id returns 404 NOT_FOUND at
+# request time, so this is overridable without a redeploy. Check the live list:
+#   curl https://generativelanguage.googleapis.com/v1beta/models -H "x-goog-api-key: $GEMINI_API_KEY"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+
+# Transcription client — same model, kept separate from the analysis chains so
+# audio and text calls can be tuned independently. No temperature: Gemini 3.x
+# flash models use fixed sampling defaults and warn if one is passed.
+transcriber = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
 
 # LangChain tracing env vars are optional — only set them if provided,
 # otherwise os.environ[...] = None crashes at import time.
@@ -58,19 +71,38 @@ def download_audio_from_url(url, filename="downloaded_audio.mp3"):
         f.write(urlopen(url).read())
     return path
 
-def transcribe_audio(file_path):
-    """Transcribe audio using Groq's hosted Whisper model."""
-    with open(file_path, "rb") as f:
-        transcription = groq_client.audio.transcriptions.create(
-            file=(os.path.basename(file_path), f.read()),
-            model="whisper-large-v3-turbo",  # fast + cheap; use "whisper-large-v3" for max accuracy
-            response_format="text",
-            temperature=0.0,
-        )
-    # response_format="text" returns a plain string directly
-    return transcription if isinstance(transcription, str) else transcription.text
+def _message_text(content):
+    """Flatten a LangChain message body to plain text.
 
-# === LangChain Prompts and Chains (Groq-backed) ===
+    Gemini returns `content` as a list of typed blocks (text, thought signatures,
+    ...) rather than a bare string, so pull out and join the text blocks.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts).strip()
+    return str(content)
+
+
+def transcribe_audio(file_path):
+    """Transcribe audio with Gemini's native multimodal audio support."""
+    mime_type = mimetypes.guess_type(file_path)[0] or "audio/mpeg"
+    with open(file_path, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode()
+
+    message = HumanMessage(content=[
+        {"type": "text", "text": "Transcribe this audio verbatim. Output only the transcript text."},
+        {"type": "media", "mime_type": mime_type, "data": audio_b64},
+    ])
+    return _message_text(transcriber.invoke([message]).content)
+
+# === LangChain Prompts and Chains (Gemini-backed) ===
 parser = JsonOutputParser()
 
 prompt_1 = ChatPromptTemplate.from_messages([
@@ -107,10 +139,8 @@ Respond with ONLY valid JSON, no markdown formatting, no code fences, no extra t
     ("user", "{input}")
 ])
 
-# Groq's Llama 3.3 70B is a strong general-purpose replacement for gpt-4o here.
-# Other good options: "llama-3.1-8b-instant" (cheaper/faster), "mixtral-8x7b-32768".
-llm_1 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
-llm_2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
+llm_1 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
+llm_2 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
 
 chain_1 = prompt_1 | llm_1 | parser
 chain_2 = prompt_2 | llm_2 | parser
