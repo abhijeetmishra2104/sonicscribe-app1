@@ -221,6 +221,26 @@ chain_2 = prompt_2 | llm_2 | parser
 def index():
     return render_template('index.html')
 
+
+@app.route('/healthz')
+def healthz():
+    """Which code is actually serving, and with what config.
+
+    Added because confirming a deploy otherwise meant inferring the running
+    commit from the *shape* of an error response. Render injects the git
+    metadata; `model` reports the id in effect after any dashboard override,
+    which is the setting most likely to differ from what the source says.
+    """
+    return jsonify({
+        "ok": True,
+        "commit": (os.getenv("RENDER_GIT_COMMIT") or "unknown")[:12],
+        "branch": os.getenv("RENDER_GIT_BRANCH") or "unknown",
+        "model": GEMINI_MODEL,
+        "gemini_timeout": GEMINI_TIMEOUT,
+        "gemini_max_retries": GEMINI_MAX_RETRIES,
+        "langsmith_tracing": bool(os.environ.get("LANGCHAIN_TRACING_V2")),
+    })
+
 def _run_stage(stage, fn, *args, **kwargs):
     """Run one pipeline step, tagging any failure with the step that raised it."""
     try:
