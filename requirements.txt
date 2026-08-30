@@ -3,7 +3,12 @@ flask-cors
 python-dotenv
 pandas
 gdown
-langchain-core
-langchain-google-genai
 gunicorn
 scikit-learn==1.7.0
+
+# Pinned: these were unpinned, so each Docker build picked up whatever was latest
+# on PyPI at build time. That is why the container's behaviour drifted away from
+# a working local checkout. Verified together against the analyze-note pipeline.
+langchain-core==1.5.6
+langchain-google-genai==4.3.4
+google-genai==2.18.1
