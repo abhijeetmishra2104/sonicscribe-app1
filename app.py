@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 import os
+import sys
 import json
+import logging
 import base64
 import mimetypes
 import pickle
@@ -28,12 +31,28 @@ if not GEMINI_API_KEY:
 # Google retires model ids periodically — a retired id returns 404 NOT_FOUND at
 # request time, so this is overridable without a redeploy. Check the live list:
 #   curl https://generativelanguage.googleapis.com/v1beta/models -H "x-goog-api-key: $GEMINI_API_KEY"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+# flash-lite over flash: each /analyze-note upload spends three calls (transcribe
+# + both chains) and the free tier caps gemini-3.6-flash at 20, which one person
+# testing exhausts in minutes. Quota is tracked per model, so this bucket is separate.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
+# Every Gemini call must fail *inside* gunicorn's --timeout (see Dockerfile) or
+# the worker is SIGKILLed mid-request and the caller gets gunicorn's HTML error
+# page instead of our JSON. The SDK retries 429/5xx with exponential backoff, so
+# an exhausted quota otherwise stacks retries until the worker dies -- cap both.
+GEMINI_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "45"))
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "1"))
+
+_client_opts = dict(
+    google_api_key=GEMINI_API_KEY,
+    timeout=GEMINI_TIMEOUT,
+    max_retries=GEMINI_MAX_RETRIES,
+)
 
 # Transcription client — same model, kept separate from the analysis chains so
 # audio and text calls can be tuned independently. No temperature: Gemini 3.x
 # flash models use fixed sampling defaults and warn if one is passed.
-transcriber = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
+transcriber = ChatGoogleGenerativeAI(model=GEMINI_MODEL, **_client_opts)
 
 # LangChain tracing env vars are optional — only set them if provided,
 # otherwise os.environ[...] = None crashes at import time.
@@ -43,7 +62,17 @@ if os.getenv("LANGCHAIN_API_KEY"):
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "sonicscribe")
 
 # === Flask App Setup ===
+# Without an explicit config, app.logger records are dropped under gunicorn and
+# the traceback never reaches the host's log stream -- which is what made this
+# route's failures invisible in the Render logs.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stderr,
+)
+
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
 CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
@@ -58,6 +87,18 @@ if not os.path.exists(model4_path):
 
 with open(model4_path, 'rb') as f:
     model4 = pickle.load(f)
+
+# === Errors ===
+class StageError(Exception):
+    """A failure we can name. `stage` tells the caller which step broke, so the
+    JSON error says "transcribe: ..." instead of surfacing a downstream SDK
+    message from a stage that was only the messenger."""
+
+    def __init__(self, stage, message, status=502):
+        super().__init__(message)
+        self.stage = stage
+        self.status = status
+
 
 # === Utility Functions ===
 def save_uploaded_audio(audio, filename):
@@ -96,11 +137,34 @@ def transcribe_audio(file_path):
     with open(file_path, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode()
 
-    message = HumanMessage(content=[
-        {"type": "text", "text": "Transcribe this audio verbatim. Output only the transcript text."},
-        {"type": "media", "mime_type": mime_type, "data": audio_b64},
-    ])
-    return _message_text(transcriber.invoke([message]).content)
+    def ask(instruction):
+        return _message_text(transcriber.invoke([HumanMessage(content=[
+            {"type": "text", "text": instruction},
+            {"type": "media", "mime_type": mime_type, "data": audio_b64},
+        ])]).content)
+
+    text = ask("Transcribe this audio verbatim. Output only the transcript text.")
+
+    # A thinking model can spend its entire output budget on reasoning and return
+    # zero text parts (finish_reason=STOP, output_token_details.reasoning == all
+    # of output_tokens) -- observed on gemini-3.6-flash with short//ambiguous
+    # clips. That yields "" here. Nudge once for a text-only answer.
+    if not text.strip():
+        text = ask(
+            "Transcribe the speech in this audio. Reply with the transcript text "
+            "only -- no reasoning, no preamble. If there is no speech, reply NO_SPEECH."
+        )
+
+    # Never hand "" to the chains: LangChain drops a HumanMessage with empty
+    # content, leaving the request with no contents at all, and the Gemini SDK
+    # then raises the unrelated "contents are required." three lines later.
+    if not text.strip() or text.strip() == "NO_SPEECH":
+        raise StageError(
+            "transcribe",
+            "Transcription returned no text for this audio (the model produced no "
+            "transcript). The file may contain no intelligible speech.",
+        )
+    return text
 
 # === LangChain Prompts and Chains (Gemini-backed) ===
 parser = JsonOutputParser()
@@ -139,8 +203,8 @@ Respond with ONLY valid JSON, no markdown formatting, no code fences, no extra t
     ("user", "{input}")
 ])
 
-llm_1 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
-llm_2 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
+llm_1 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, **_client_opts)
+llm_2 = ChatGoogleGenerativeAI(model=GEMINI_MODEL, **_client_opts)
 
 chain_1 = prompt_1 | llm_1 | parser
 chain_2 = prompt_2 | llm_2 | parser
@@ -150,43 +214,50 @@ chain_2 = prompt_2 | llm_2 | parser
 def index():
     return render_template('index.html')
 
+def _run_stage(stage, fn, *args, **kwargs):
+    """Run one pipeline step, tagging any failure with the step that raised it."""
+    try:
+        return fn(*args, **kwargs)
+    except StageError:
+        raise
+    except Exception as e:
+        app.logger.exception("analyze-note failed during stage=%s", stage)
+        raise StageError(stage, f"{type(e).__name__}: {e}") from e
+
+
 @app.route('/api/analyze-note', methods=['POST'])
 def analyze_note():
-    try:
-        audio = request.files.get('audio_file')
-        audio_url = request.json.get("url") if request.is_json else None
+    audio = request.files.get('audio_file')
+    audio_url = request.json.get("url") if request.is_json else None
 
-        if not audio and not audio_url:
-            return jsonify({"success": False, "error": "Audio file or URL missing"}), 400
+    if not audio and not audio_url:
+        return jsonify({"success": False, "error": "Audio file or URL missing"}), 400
 
-        if audio:
-            file_path = save_uploaded_audio(audio, audio.filename)
-            original_name = audio.filename
-        else:
-            file_path = download_audio_from_url(audio_url)
-            original_name = "downloaded_audio.mp3"
+    if audio:
+        file_path = _run_stage("save_upload", save_uploaded_audio, audio, audio.filename)
+        original_name = audio.filename
+    else:
+        file_path = _run_stage("download", download_audio_from_url, audio_url)
+        original_name = "downloaded_audio.mp3"
 
-        transcript = transcribe_audio(file_path)
-        structured_data = chain_1.invoke({"input": transcript})
-        triage_data = chain_2.invoke({"input": transcript})
+    transcript = _run_stage("transcribe", transcribe_audio, file_path)
+    structured_data = _run_stage("structured_analysis", chain_1.invoke, {"input": transcript})
+    triage_data = _run_stage("triage_analysis", chain_2.invoke, {"input": transcript})
 
-        return jsonify({
-            "success": True,
-            "file": {
-                "originalName": original_name,
-                "uploadedAt": datetime.utcnow().isoformat(),
-                "url": audio_url
-            },
-            "analysis": {
-                "transcript": transcript,
-                "structured": structured_data,
-                "triage": triage_data
-            }
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
+    # Response contract consumed by the Next.js /api/upload route -- do not reshape.
+    return jsonify({
+        "success": True,
+        "file": {
+            "originalName": original_name,
+            "uploadedAt": datetime.utcnow().isoformat(),
+            "url": audio_url
+        },
+        "analysis": {
+            "transcript": transcript,
+            "structured": structured_data,
+            "triage": triage_data
+        }
+    })
 
 @app.route('/api/analyze-symptoms', methods=['POST'])
 def analyze_symptoms():
@@ -238,6 +309,32 @@ def predict():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
+# === Error handlers ===
+# Every error out of this app is JSON. Flask would otherwise answer an unhandled
+# exception -- or an aborted 400/413 raised inside request parsing, outside any
+# view's try block -- with an HTML page, which the Next.js client cannot read.
+@app.errorhandler(StageError)
+def handle_stage_error(e):
+    app.logger.error("stage=%s failed: %s", e.stage, e)
+    return jsonify({"success": False, "stage": e.stage,
+                    "error": f"{e.stage}: {e}"}), e.status
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(e):
+    return jsonify({"success": False, "error": e.description}), e.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    app.logger.exception("Unhandled exception")
+    traceback.print_exc()
+    return jsonify({"success": False, "error": f"{type(e).__name__}: {e}"}), 500
+
+
 # === Start Server ===
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5001)
+    # 8080 matches NEXT_PUBLIC_API_BASE_URL in the web-app; hosts that inject
+    # their own $PORT (Render, Heroku) override it. Avoid 5001 -- macOS AirPlay
+    # and IPFS Desktop both squat on it.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
