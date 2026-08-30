@@ -54,12 +54,19 @@ _client_opts = dict(
 # flash models use fixed sampling defaults and warn if one is passed.
 transcriber = ChatGoogleGenerativeAI(model=GEMINI_MODEL, **_client_opts)
 
-# LangChain tracing env vars are optional — only set them if provided,
-# otherwise os.environ[...] = None crashes at import time.
-if os.getenv("LANGCHAIN_API_KEY"):
-    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+# Tracing is opt-in via LANGCHAIN_TRACING_V2, not merely "a key is present".
+# A stale or revoked key otherwise switches on an exporter that 403s on every
+# run ("Failed to multipart ingest runs: ... 403 Forbidden"), which floods the
+# logs and burns background CPU without ever surfacing in the request path.
+# load_dotenv already put the key in os.environ, so nothing to copy across.
+if os.getenv("LANGCHAIN_TRACING_V2", "").strip().lower() in ("1", "true", "yes") \
+        and os.getenv("LANGCHAIN_API_KEY"):
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "sonicscribe")
+else:
+    # Clear both spellings so an inherited value can't re-enable the exporter.
+    os.environ.pop("LANGCHAIN_TRACING_V2", None)
+    os.environ.pop("LANGSMITH_TRACING", None)
 
 # === Flask App Setup ===
 # Without an explicit config, app.logger records are dropped under gunicorn and
